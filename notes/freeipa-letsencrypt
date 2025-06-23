@@ -1,0 +1,47 @@
+sudo dnf install python3-pip
+sudo pip install certbot certbot-dns-digitalocean
+
+sudo mkdir -p /etc/ssl/letsencrypt_certs
+sudo curl -o "/etc/ssl/letsencrypt_certs/isrgrootx1.pem" "https://letsencrypt.org/certs/isrgrootx1.pem"
+sudo curl -o "/etc/ssl/letsencrypt_certs/isrg-root-x2.pem" "https://letsencrypt.org/certs/isrg-root-x2.pem"
+
+sudo ipa-cacert-manage install "/etc/ssl/letsencrypt_certs/isrgrootx1.pem"
+sudo ipa-cacert-manage install "/etc/ssl/letsencrypt_certs/isrg-root-x2.pem"
+
+mkdir -p /home/admin/.secrets/certbot/
+chmod 700 /home/admin/.secrets/certbot
+touch  /home/admin/.secrets/certbot/digitalocean.ini
+chmod 600 /home/admin/.secrets/certbot/digitalocean.ini
+nano /home/admin/.secrets/certbot/digitalocean.ini
+
+sudo certbot certonly \
+	--dns-digitalocean \
+	--dns-digitalocean-credentials "/home/admin/.secrets/certbot/digitalocean.ini" \
+	--preferred-challenges dns \
+	--agree-tos \
+	--email "admin@ltgk.net" \
+	--keep-until-expiring \
+	--non-interactive \
+	--domain "idm01-primary.ams3.internal.ltgk.net"
+
+sudo ipa-cacert-manage install "/etc/letsencrypt/live/idm01-primary.ams3.internal.ltgk.net/chain.pem"
+sudo ipa-certupdate
+
+PKCS12_FILE="/tmp/ipa_cert_$(date +%s).p12"
+TEMP_FULLCHAIN_WITH_ROOT_FILE="/tmp/fullchain_with_root_$(date +%s).pem"
+
+sudo cat "/etc/letsencrypt/live/idm01-primary.ams3.internal.ltgk.net/cert.pem" "/etc/letsencrypt/live/idm01-primary.ams3.internal.ltgk.net/chain.pem" "/etc/ssl/letsencrypt_certs/isrgrootx1.pem" > "${TEMP_FULLCHAIN_WITH_ROOT_FILE}"
+openssl crl2pkcs7 -nocrl -certfile "${TEMP_FULLCHAIN_WITH_ROOT_FILE}" | openssl pkcs7 -print_certs -noout
+
+sudo openssl pkcs12 \
+	-export \
+	-out "${PKCS12_FILE}" \
+	-inkey "/etc/letsencrypt/live/idm01-primary.ams3.internal.ltgk.net/privkey.pem" \
+	-in "/etc/letsencrypt/live/idm01-primary.ams3.internal.ltgk.net/cert.pem" \
+	-certfile "${TEMP_FULLCHAIN_WITH_ROOT_FILE}" \
+	-name "FreeIPA_LetsEncrypt_$(date +%Y%m%d%H%M%S)"
+
+sudo ipa-server-certinstall -w -d "${PKCS12_FILE}"
+sudo ipactl restart
+sudo rm "${PKCS12_FILE}"
+sudo rm "${TEMP_FULLCHAIN_WITH_ROOT_FILE}"
